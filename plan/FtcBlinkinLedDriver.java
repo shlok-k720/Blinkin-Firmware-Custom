@@ -179,11 +179,14 @@ public class FtcBlinkinLedDriver implements HardwareDevice {
     public static final int MAX_PAYLOAD = 99;
     public static final int FIRST_COLOR_PATTERN_ID = Pattern.HOT_PINK.id();
     public static final int DEFAULT_FRAME_DURATION_MS = 25;
-    public static final Pattern DEFAULT_RESTORE_PATTERN = Pattern.BLACK;
+    public static final Pattern DEFAULT_RESTORE_PATTERN = Pattern.COLOR_WAVES_PARTY;
 
     private static final String TAG = "FtcBlinkinLedDriver";
-    private static final double SERVO_POSITION_PER_MICROSECOND = 0.0005;
-    private static final double BASE_SERVO_POSITION = 505 * SERVO_POSITION_PER_MICROSECOND;
+    private static final double SERVO_POSITION_MIN = 0.0;
+    private static final double SERVO_POSITION_MAX = 1.0;
+    private static final int SERVO_PULSE_MIN_US = 500;
+    private static final int SERVO_PULSE_MAX_US = 2500;
+    private static final int NORMAL_PULSE_BASE_US = 1005;
     private static final int NORMAL_PULSE_STEP_US = 10;
     private static final int COMMAND_ENTRY_BASE_US = 2105;
 
@@ -195,27 +198,28 @@ public class FtcBlinkinLedDriver implements HardwareDevice {
 
     private final ServoControllerEx controller;
     private final int port;
-    private final ModeLock modeLock;
-    private final Pattern restorePatternWhenUnknown;
-    private final int frameDurationMs;
+    private ModeLock modeLock;
+    private Pattern restorePatternWhenUnknown;
+    private int frameDurationMs;
 
     private boolean assumedSetupMode;
     private StripMode knownStripMode;
     private Pattern lastPattern;
 
     public FtcBlinkinLedDriver(ServoControllerEx controller, int port) {
-        this(controller, port, ModeLock.UNLOCKED, DEFAULT_RESTORE_PATTERN, DEFAULT_FRAME_DURATION_MS);
-    }
-
-    public FtcBlinkinLedDriver(
-            ServoControllerEx controller,
-            int port,
-            ModeLock modeLock,
-            Pattern restorePatternWhenUnknown,
-            int frameDurationMs) {
         if (controller == null) {
             throw new IllegalArgumentException("controller must not be null");
         }
+
+        this.controller = controller;
+        this.port = port;
+        initialize(ModeLock.UNLOCKED, DEFAULT_RESTORE_PATTERN, DEFAULT_FRAME_DURATION_MS);
+    }
+
+    public synchronized void initialize(
+            ModeLock modeLock,
+            Pattern restorePatternWhenUnknown,
+            int frameDurationMs) {
         if (modeLock == null) {
             throw new IllegalArgumentException("modeLock must not be null");
         }
@@ -226,12 +230,12 @@ public class FtcBlinkinLedDriver implements HardwareDevice {
             throw new IllegalArgumentException("frameDurationMs must be > 0");
         }
 
-        this.controller = controller;
-        this.port = port;
         this.modeLock = modeLock;
         this.restorePatternWhenUnknown = restorePatternWhenUnknown;
         this.frameDurationMs = frameDurationMs;
         this.knownStripMode = initialKnownMode(modeLock);
+        this.assumedSetupMode = false;
+        this.lastPattern = null;
     }
 
     public synchronized void setPattern(Pattern pattern) {
@@ -340,13 +344,14 @@ public class FtcBlinkinLedDriver implements HardwareDevice {
         ensureCommandAllowed(slot, payload, operation);
 
         Pattern restorePattern = lastPattern != null ? lastPattern : restorePatternWhenUnknown;
+        boolean interrupted = false;
 
         controller.setServoPosition(port, positionForCommandSlot(slot));
-        sleepFrame();
+        interrupted |= sleepFrame();
         controller.setServoPosition(port, positionForPayload(payload));
-        sleepFrame();
+        interrupted |= sleepFrame();
         controller.setServoPosition(port, positionForPattern(restorePattern));
-        sleepFrame();
+        interrupted |= sleepFrame();
 
         if (slot == SLOT_SET_5V_MODE_PRIMARY || slot == SLOT_SET_5V_MODE_SECONDARY) {
             knownStripMode = StripMode.MODE_5V;
@@ -361,6 +366,11 @@ public class FtcBlinkinLedDriver implements HardwareDevice {
                 slot,
                 payload,
                 restorePattern);
+
+        if (interrupted) {
+            Thread.currentThread().interrupt();
+            RobotLog.vv(TAG, "%s completed after preserving an interrupt", operation);
+        }
     }
 
     private void ensureCommandAllowed(int slot, int payload, String operation) {
@@ -421,24 +431,50 @@ public class FtcBlinkinLedDriver implements HardwareDevice {
     }
 
     private static double positionForPattern(Pattern pattern) {
-        return BASE_SERVO_POSITION + (pattern.id() * NORMAL_PULSE_STEP_US * SERVO_POSITION_PER_MICROSECOND);
+        return pulseWidthUsToServoPosition(NORMAL_PULSE_BASE_US + (pattern.id() * NORMAL_PULSE_STEP_US));
     }
 
     private static double positionForPayload(int payload) {
-        return BASE_SERVO_POSITION + (payload * NORMAL_PULSE_STEP_US * SERVO_POSITION_PER_MICROSECOND);
+        return pulseWidthUsToServoPosition(NORMAL_PULSE_BASE_US + (payload * NORMAL_PULSE_STEP_US));
     }
 
     private static double positionForCommandSlot(int slot) {
-        return (COMMAND_ENTRY_BASE_US + (slot * NORMAL_PULSE_STEP_US)) * SERVO_POSITION_PER_MICROSECOND;
+        return pulseWidthUsToServoPosition(COMMAND_ENTRY_BASE_US + (slot * NORMAL_PULSE_STEP_US));
     }
 
-    private void sleepFrame() {
-        try {
-            Thread.sleep(frameDurationMs);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("Interrupted while sending a Blinkin command", e);
+    private static double pulseWidthUsToServoPosition(int pulseWidthUs) {
+        if (pulseWidthUs < SERVO_PULSE_MIN_US || pulseWidthUs > SERVO_PULSE_MAX_US) {
+            throw new IllegalArgumentException(
+                    "Pulse width must be in ["
+                            + SERVO_PULSE_MIN_US
+                            + ", "
+                            + SERVO_PULSE_MAX_US
+                            + "] microseconds: "
+                            + pulseWidthUs);
         }
+
+        return (double) (pulseWidthUs - SERVO_PULSE_MIN_US) / (SERVO_PULSE_MAX_US - SERVO_PULSE_MIN_US);
+    }
+
+    private boolean sleepFrame() {
+        long remainingNanos = frameDurationMs * 1_000_000L;
+        long deadlineNanos = System.nanoTime() + remainingNanos;
+        boolean interrupted = false;
+
+        while (remainingNanos > 0) {
+            long sleepMillis = remainingNanos / 1_000_000L;
+            int sleepNanos = (int) (remainingNanos % 1_000_000L);
+
+            try {
+                Thread.sleep(sleepMillis, sleepNanos);
+                break;
+            } catch (InterruptedException e) {
+                interrupted = true;
+                remainingNanos = deadlineNanos - System.nanoTime();
+            }
+        }
+
+        return interrupted;
     }
 
     @Override

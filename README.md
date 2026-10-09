@@ -59,7 +59,7 @@ This guide will use the programmer built into the Arduino Uno to target the Blin
 
 ## FTC Java command surface
 
-Section 1 is now implemented as a Java-side wrapper example in [FtcBlinkinLedDriver.java](./plan/FtcBlinkinLedDriver.java). It keeps stock PWM pattern writes available while adding a complete command API for the custom firmware's existing `gCommands[]` command surface.
+Section 1 is now implemented as a Java-side wrapper example in [FtcBlinkinLedDriver.java](./plan/FtcBlinkinLedDriver.java). It keeps stock PWM pattern writes available while adding a small command API for the custom firmware's existing `gCommands[]` command surface.
 
 ### PWM protocol summary
 
@@ -84,15 +84,16 @@ Section 1 is now implemented as a Java-side wrapper example in [FtcBlinkinLedDri
 | 8 | `cmdSetLinearBlend` | Set linear blend | Payload ignored |
 | 9 | `cmdSetNoBlend` | Set no blend | Payload ignored |
 
-### Normalized Java API behavior
+### Java API behavior
 
-- The wrapper exposes semantic `set5VMode()` and `set12VMode()` methods even though firmware slots `1/2` and `3/4` are duplicates
-- The wrapper also keeps a raw API for advanced callers that need symbolic or numeric access to the exact firmware slot numbers
-- Color commands stay numeric by design, but the normalized API rejects values outside `78-99` instead of relying on the firmware's coercion behavior
-- `setDefaultPattern(...)` accepts only the 100 defined pattern enums
-- Blend control uses a `BlendMode` enum
-- Locked-mode builds are modeled by capability metadata and reject unsupported mode-switch calls before transmission
+- Use `setPattern(...)` for normal live pattern output
+- Use `setMode(...)` for 5V vs 12V selection; raw mode-switch duplicates still remain available through numeric slot access
+- Use `setColor1(int androidColor)` and `setColor2(int androidColor)` with `android.graphics.Color` values; the wrapper converts them to the nearest firmware-supported color payload automatically
+- Use `setDefaultPattern(...)` for the no-signal default pattern
+- Use `setBlend(...)` for blend mode
+- Use `sendCommand(slot, payload)` only for low-level debugging or exact firmware-slot compatibility
 - `disableOutput()` remains sticky because the current firmware has no dedicated enable command
+- Locked-mode builds reject unsupported mode-switch calls before transmission
 
 ### Important FTC-specific transmission detail
 
@@ -102,7 +103,11 @@ FTC servo ports emit continuous PWM. A one-shot command cannot safely leave the 
 2. sends the payload pulse
 3. restores the last known live pattern pulse
 
-If the wrapper has not been told or has not previously set a live pattern, it restores the firmware's current compile-time no-signal default pattern (`pattern 28`).
+If the wrapper has not previously set a live pattern, it restores the firmware's compile-time no-signal default pattern (`pattern 28`, `COLOR_WAVES_PARTY`).
+
+### Blocking behavior
+
+The current wrapper is synchronous. Command writes intentionally wait one frame after the command-entry pulse, one frame after the payload pulse, and one frame after the restore pulse. With the default FTC SDK constructor path, that means a command call blocks for about `75 ms` (`3 * 25 ms`) unless you call `initialize(...)` with a different frame duration.
 
 ### Setup-mode guard
 
@@ -116,35 +121,28 @@ driver.setAssumedSetupMode(false);  // command writes allowed again
 ### Example usage
 
 ```java
+import android.graphics.Color;
+
 FtcBlinkinLedDriver driver = hardwareMap.get(FtcBlinkinLedDriver.class, "blinkin");
 
-driver.setPattern(FtcBlinkinLedDriver.Pattern.RAINBOW_PARTY).throwIfFailure();
-driver.setColor1(78).throwIfFailure(); // first firmware-supported solid-color payload
-driver.setBlendMode(FtcBlinkinLedDriver.BlendMode.LINEAR).throwIfFailure();
-driver.setDefaultPattern(FtcBlinkinLedDriver.Pattern.COLOR_WAVES_PARTY).throwIfFailure();
+driver.initialize(
+        FtcBlinkinLedDriver.ModeLock.UNLOCKED,
+        FtcBlinkinLedDriver.Pattern.COLOR_WAVES_PARTY,
+        FtcBlinkinLedDriver.DEFAULT_FRAME_DURATION_MS);
+
+driver.setPattern(FtcBlinkinLedDriver.Pattern.RAINBOW_PARTY);
+driver.setColor1(Color.rgb(255, 0, 0));
+driver.setColor2(Color.rgb(0, 0, 255));
+driver.setBlend(FtcBlinkinLedDriver.BlendMode.LINEAR);
+driver.setDefaultPattern(FtcBlinkinLedDriver.Pattern.COLOR_WAVES_PARTY);
+driver.setMode(FtcBlinkinLedDriver.StripMode.MODE_5V);
 ```
 
 ### Raw command examples
 
 ```java
-driver.sendRawCommand(FtcBlinkinLedDriver.RawCommandSlot.SET_5V_MODE_SECONDARY, 0)
-        .throwIfFailure();
-
-driver.sendRawCommand(6, 99).throwIfFailure(); // raw slot 6 = Color 2, payload 99
-```
-
-### Capability inspection
-
-```java
-FtcBlinkinLedDriver.Capabilities capabilities = driver.getCapabilities();
-
-if (!capabilities.modeSwitchingSupported()) {
-    // Future locked build: do not offer 5V/12V switching controls.
-}
-
-if (!capabilities.outputReenableWithoutModeChange()) {
-    // Current firmware has no dedicated enable-output command.
-}
+driver.sendCommand(FtcBlinkinLedDriver.SLOT_SET_5V_MODE_SECONDARY, 0);
+driver.sendCommand(FtcBlinkinLedDriver.SLOT_SET_COLOR2, 99); // raw slot 6 = Color 2
 ```
 
 ## Editing the Firmware
