@@ -178,7 +178,6 @@ public class FtcBlinkinLedDriver implements HardwareDevice {
     public static final int MIN_PAYLOAD = 0;
     public static final int MAX_PAYLOAD = 99;
     public static final int FIRST_COLOR_PATTERN_ID = Pattern.HOT_PINK.id();
-    public static final int LAST_COLOR_PATTERN_ID = Pattern.BLACK.id();
     public static final int DEFAULT_FRAME_DURATION_MS = 25;
     public static final Pattern DEFAULT_RESTORE_PATTERN = Pattern.BLACK;
 
@@ -466,6 +465,7 @@ public class FtcBlinkinLedDriver implements HardwareDevice {
     public synchronized void resetDeviceConfigurationForOpMode() {
         assumedSetupMode = false;
         knownStripMode = initialKnownMode(modeLock);
+        lastPattern = null;
     }
 
     @Override
