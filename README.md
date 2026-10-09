@@ -1,5 +1,9 @@
 # REV Blinkin LED Driver
 
+# This is the custom firmware for the REV Blinkin LED Driver. 
+The `master` branch maintains the original code, but the `5v` and `12v` branches hard-code 5V and 12V modes, respectively.
+
+
 ## Getting Started
 
 **Important Note:** Opening this device or using modified firmware *may or may not* change the legality for use in robotics competitions. Please refer to the rules of the specific competition you are using this device in before making modifications.
