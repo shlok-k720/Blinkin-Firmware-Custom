@@ -1,7 +1,7 @@
 # REV Blinkin LED Driver
 
 # This is the custom firmware for the REV Blinkin LED Driver. 
-The `master` branch maintains the original code, but the `5v` and `12v` branches hard-code 5V and 12V modes, respectively.
+This repository currently has a single `master` branch. Hard-locked `5v` and `12v` firmware variants are planned work, not branches that already exist.
 
 
 ## Getting Started
@@ -56,6 +56,96 @@ This guide will use the programmer built into the Arduino Uno to target the Blin
 - Turn the left two potentiometers on the Blinkin to adjust the preset team colors (Used in patterns 49 through 79)
 - Turn the rightmost potentiometer to adjust the length of the LED strip
 - A list of the preset patterns can either be found in **Blinkin-Firmware.ino** or [here](http://www.revrobotics.com/content/docs/REV-11-1105-UM.pdf)
+
+## FTC Java command surface
+
+Section 1 is now implemented as a Java-side wrapper example in [FtcBlinkinCommandDriver.java](./plan/FtcBlinkinCommandDriver.java). It keeps stock PWM pattern writes available while adding a complete command API for the custom firmware's existing `gCommands[]` command surface.
+
+### PWM protocol summary
+
+- Normal pattern selection uses approximately **1.00 ms to 2.00 ms** pulses (`2000-4000` timer ticks at `0.5 us/tick`)
+- Command entry uses approximately **2.10 ms to 2.20 ms** pulses (`4200-4400` timer ticks)
+- After a command-entry pulse, the **next normal-width pulse** becomes the command payload and is decoded to `0-99`
+- Pulses outside those windows are ignored by the firmware
+- Command-entry pulses are ignored while the firmware is in setup mode
+
+### Raw command slots
+
+| Slot | Firmware handler | Meaning | Payload rules |
+|---|---|---|---|
+| 0 | `cmdNoStrip` | Disable output | Payload ignored |
+| 1 | `cmd5VStrip` | Switch to 5V mode | Payload ignored |
+| 2 | `cmd5VStrip` | Switch to 5V mode | Payload ignored |
+| 3 | `cmd12VStrip` | Switch to 12V mode | Payload ignored |
+| 4 | `cmd12VStrip` | Switch to 12V mode | Payload ignored |
+| 5 | `cmdChangeColor1` | Update Color 1 | Use payload `78-99` |
+| 6 | `cmdChangeColor2` | Update Color 2 | Use payload `78-99` |
+| 7 | `cmdChangeDefaultPattern` | Update the no-signal default pattern | Use payload `0-99` |
+| 8 | `cmdSetLinearBlend` | Set linear blend | Payload ignored |
+| 9 | `cmdSetNoBlend` | Set no blend | Payload ignored |
+
+### Normalized Java API behavior
+
+- The wrapper exposes semantic `set5VMode()` and `set12VMode()` methods even though firmware slots `1/2` and `3/4` are duplicates
+- The wrapper also keeps a raw API for advanced callers that need symbolic or numeric access to the exact firmware slot numbers
+- Color commands stay numeric by design, but the normalized API rejects values outside `78-99` instead of relying on the firmware's coercion behavior
+- `setDefaultPattern(...)` accepts only the 100 defined pattern enums
+- Blend control uses a `BlendMode` enum
+- Locked-mode builds are modeled by capability metadata and reject unsupported mode-switch calls before transmission
+- `disableOutput()` remains sticky because the current firmware has no dedicated enable command
+
+### Important FTC-specific transmission detail
+
+FTC servo ports emit continuous PWM. A one-shot command cannot safely leave the servo output sitting on the command payload pulse, because the firmware would see later pulses as ordinary pattern writes after command mode exits. The wrapper therefore:
+
+1. sends the command-entry pulse
+2. sends the payload pulse
+3. restores the last known live pattern pulse
+
+If the wrapper has not been told or has not previously set a live pattern, it restores the firmware's current compile-time no-signal default pattern (`pattern 28`).
+
+### Setup-mode guard
+
+The firmware has no readback yet, so the wrapper cannot detect setup mode on its own. The Java API therefore tracks setup mode as host-assumed state:
+
+```java
+driver.setAssumedSetupMode(true);   // command writes now reject locally
+driver.setAssumedSetupMode(false);  // command writes allowed again
+```
+
+### Example usage
+
+```java
+FtcBlinkinCommandDriver driver = hardwareMap.get(FtcBlinkinCommandDriver.class, "blinkin");
+
+driver.setPattern(FtcBlinkinCommandDriver.Pattern.RAINBOW_PARTY).throwIfFailure();
+driver.setColor1(78).throwIfFailure(); // first firmware-supported solid-color payload
+driver.setBlendMode(FtcBlinkinCommandDriver.BlendMode.LINEAR).throwIfFailure();
+driver.setDefaultPattern(FtcBlinkinCommandDriver.Pattern.COLOR_WAVES_PARTY).throwIfFailure();
+```
+
+### Raw command examples
+
+```java
+driver.sendRawCommand(FtcBlinkinCommandDriver.RawCommandSlot.SET_5V_MODE_SECONDARY, 0)
+        .throwIfFailure();
+
+driver.sendRawCommand(6, 99).throwIfFailure(); // raw slot 6 = Color 2, payload 99
+```
+
+### Capability inspection
+
+```java
+FtcBlinkinCommandDriver.Capabilities capabilities = driver.getCapabilities();
+
+if (!capabilities.modeSwitchingSupported()) {
+    // Future locked build: do not offer 5V/12V switching controls.
+}
+
+if (!capabilities.outputReenableWithoutModeChange()) {
+    // Current firmware has no dedicated enable-output command.
+}
+```
 
 ## Editing the Firmware
 
