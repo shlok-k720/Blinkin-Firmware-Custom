@@ -50,7 +50,7 @@ Define a complete, documented Java-facing command surface for everything the cur
   - blend mode
   - mode-lock capability
 - defined locked-build behavior so unsupported mode-switch requests are rejected before sending
-- added a new FTC wrapper example in [FtcBlinkinCommandDriver.java](/Users/kshlok/Downloads/Blinkin-Firmware-Custom/plan/FtcBlinkinCommandDriver.java)
+- added a new FTC wrapper example in [FtcBlinkinLedDriver.java](/Users/kshlok/Downloads/Blinkin-Firmware-Custom/plan/FtcBlinkinLedDriver.java)
 - added developer-facing documentation and Java usage examples in [README.md](/Users/kshlok/Downloads/Blinkin-Firmware-Custom/README.md)
 
 ### Implemented API decisions
