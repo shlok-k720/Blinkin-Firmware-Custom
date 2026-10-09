@@ -45,35 +45,33 @@ Define a complete, documented Java-facing command surface for everything the cur
 - normalized the duplicate strip-mode slots into one semantic 5V command and one semantic 12V command at the FTC API level
 - defined Java enums/constants for:
   - live patterns
-  - normalized commands
-  - raw command slots
+  - strip mode
   - blend mode
   - mode-lock capability
+  - raw command slots
 - defined locked-build behavior so unsupported mode-switch requests are rejected before sending
 - added a new FTC wrapper example in [FtcBlinkinLedDriver.java](/Users/kshlok/Downloads/Blinkin-Firmware-Custom/plan/FtcBlinkinLedDriver.java)
 - added developer-facing documentation and Java usage examples in [README.md](/Users/kshlok/Downloads/Blinkin-Firmware-Custom/README.md)
 
 ### Implemented API decisions
 - normalized API:
-  - uses semantic 5V/12V methods instead of exposing the duplicated strip-mode slots directly
+  - uses a single semantic strip-mode setter instead of exposing duplicate strip-mode methods directly
   - uses typed pattern enums for live-pattern and default-pattern methods
   - uses a blend enum for blend control
-  - keeps color writes numeric, but validates them to the firmware-supported `78-99` range
+  - accepts Android color ints for color writes and converts them to the nearest firmware-supported color payload automatically
 - raw API:
-  - remains public as an advanced compatibility layer
-  - supports both symbolic raw-slot enums and numeric slot access
+  - remains public as a small advanced compatibility layer
+  - uses direct numeric slot access
   - preserves duplicate raw strip-mode slots `1/2` and `3/4`
   - validates only the transport-level `0-99` payload range
 - command execution:
-  - offers both synchronous and asynchronous forms
+  - uses synchronous calls only
   - hides the two-pulse sequence behind one call
   - restores the last known live pattern after command transmission so continuous FTC PWM does not leave the payload repeating as a normal pattern
   - falls back to the firmware's default no-signal pattern if no live pattern has been set yet
 - capability reporting:
-  - exposes that readback does not exist yet
-  - exposes whether raw commands and mode switching are supported
-  - exposes that `disableOutput()` is not reversible without a mode change on current firmware
   - treats setup mode as a host-tracked precondition that rejects command writes when marked active
+  - relies on exceptions and logging for unsupported or invalid operations instead of result/capability wrapper types
 
 ## Section 2 — Read values back from the firmware
 
