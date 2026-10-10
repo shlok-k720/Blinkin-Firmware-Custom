@@ -109,6 +109,25 @@ If the wrapper has not previously set a live pattern, it restores the firmware's
 
 The current wrapper is synchronous. Command writes intentionally wait one frame after the command-entry pulse, one frame after the payload pulse, and one frame after the restore pulse. With the default FTC SDK constructor path, that means a command call blocks for about `75 ms` (`3 * 25 ms`) unless you call `initialize(...)` with a different frame duration.
 
+### Async queued command worker
+
+For FTC loop-friendly use, the wrapper also includes a single-thread queued worker. These methods return immediately and preserve command order:
+
+- `queueSetPattern(...)`
+- `queueDisableOutput()`
+- `queueSetMode(...)`
+- `queueSetColor1(...)`
+- `queueSetColor2(...)`
+- `queueSetDefaultPattern(...)`
+- `queueSetBlend(...)`
+- `queueCommand(slot, payload)`
+
+You can inspect and manage the queue with:
+
+- `isCommandQueueBusy()`
+- `getQueuedCommandCount()`
+- `clearQueuedCommands()`
+
 ### Setup-mode guard
 
 The firmware has no readback yet, so the wrapper cannot detect setup mode on its own. The Java API therefore tracks setup mode as host-assumed state:
@@ -136,6 +155,22 @@ driver.setColor2(Color.rgb(0, 0, 255));
 driver.setBlend(FtcBlinkinLedDriver.BlendMode.LINEAR);
 driver.setDefaultPattern(FtcBlinkinLedDriver.Pattern.COLOR_WAVES_PARTY);
 driver.setMode(FtcBlinkinLedDriver.StripMode.MODE_5V);
+```
+
+### Async loop-friendly example
+
+```java
+import android.graphics.Color;
+
+FtcBlinkinLedDriver driver = hardwareMap.get(FtcBlinkinLedDriver.class, "blinkin");
+
+driver.queueSetPattern(FtcBlinkinLedDriver.Pattern.RAINBOW_PARTY);
+driver.queueSetColor1(Color.rgb(255, 0, 0));
+driver.queueSetBlend(FtcBlinkinLedDriver.BlendMode.LINEAR);
+
+if (!driver.isCommandQueueBusy()) {
+    driver.queueSetMode(FtcBlinkinLedDriver.StripMode.MODE_5V);
+}
 ```
 
 ### Raw command examples

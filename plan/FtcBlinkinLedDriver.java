@@ -10,6 +10,10 @@ import com.qualcomm.robotcore.hardware.configuration.annotations.DevicePropertie
 import com.qualcomm.robotcore.hardware.configuration.annotations.ServoType;
 import com.qualcomm.robotcore.util.RobotLog;
 
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+
 /**
  * Minimal FTC wrapper for the custom Blinkin firmware PWM protocol.
  *
@@ -198,6 +202,7 @@ public class FtcBlinkinLedDriver implements HardwareDevice {
 
     private final ServoControllerEx controller;
     private final int port;
+    private final ThreadPoolExecutor commandWorker;
     private ModeLock modeLock;
     private Pattern restorePatternWhenUnknown;
     private int frameDurationMs;
@@ -213,6 +218,17 @@ public class FtcBlinkinLedDriver implements HardwareDevice {
 
         this.controller = controller;
         this.port = port;
+        this.commandWorker = new ThreadPoolExecutor(
+                1,
+                1,
+                0L,
+                TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<>(),
+                runnable -> {
+                    Thread thread = new Thread(runnable, "BlinkinCommandWorker-" + port);
+                    thread.setDaemon(true);
+                    return thread;
+                });
         initialize(ModeLock.UNLOCKED, DEFAULT_RESTORE_PATTERN, DEFAULT_FRAME_DURATION_MS);
     }
 
@@ -236,6 +252,7 @@ public class FtcBlinkinLedDriver implements HardwareDevice {
         this.knownStripMode = initialKnownMode(modeLock);
         this.assumedSetupMode = false;
         this.lastPattern = null;
+        this.commandWorker.getQueue().clear();
     }
 
     public synchronized void setPattern(Pattern pattern) {
@@ -502,10 +519,65 @@ public class FtcBlinkinLedDriver implements HardwareDevice {
         assumedSetupMode = false;
         knownStripMode = initialKnownMode(modeLock);
         lastPattern = null;
+        commandWorker.getQueue().clear();
     }
 
     @Override
     public void close() {
-        // No resources to release.
+        commandWorker.shutdownNow();
+    }
+
+    public void queueSetPattern(Pattern pattern) {
+        queue("queueSetPattern(" + pattern + ")", () -> setPattern(pattern));
+    }
+
+    public void queueDisableOutput() {
+        queue("queueDisableOutput", this::disableOutput);
+    }
+
+    public void queueSetMode(StripMode mode) {
+        queue("queueSetMode(" + mode + ")", () -> setMode(mode));
+    }
+
+    public void queueSetColor1(int androidColor) {
+        queue("queueSetColor1", () -> setColor1(androidColor));
+    }
+
+    public void queueSetColor2(int androidColor) {
+        queue("queueSetColor2", () -> setColor2(androidColor));
+    }
+
+    public void queueSetDefaultPattern(Pattern pattern) {
+        queue("queueSetDefaultPattern(" + pattern + ")", () -> setDefaultPattern(pattern));
+    }
+
+    public void queueSetBlend(BlendMode blendMode) {
+        queue("queueSetBlend(" + blendMode + ")", () -> setBlend(blendMode));
+    }
+
+    public void queueCommand(int slot, int payload) {
+        queue("queueCommand(" + slot + ", " + payload + ")", () -> sendCommand(slot, payload));
+    }
+
+    public boolean isCommandQueueBusy() {
+        return commandWorker.getActiveCount() > 0 || !commandWorker.getQueue().isEmpty();
+    }
+
+    public int getQueuedCommandCount() {
+        return commandWorker.getQueue().size();
+    }
+
+    public void clearQueuedCommands() {
+        commandWorker.getQueue().clear();
+    }
+
+    private void queue(String operation, Runnable runnable) {
+        commandWorker.execute(() -> {
+            try {
+                runnable.run();
+            } catch (RuntimeException e) {
+                RobotLog.vv(TAG, "%s failed: %s", operation, e.getMessage());
+            }
+        });
     }
 }
